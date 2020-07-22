@@ -12,6 +12,7 @@ args = parser.parse_args()
 
 bpf_text = """
 #include <linux/sched.h>
+#include <linux/ptrace.h>
 #include <uapi/linux/ptrace.h>
 
 BPF_HASH(data, u32, u64);
@@ -22,14 +23,13 @@ int trace_syscall_entry(struct pt_regs *ctx)
         return 0;
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    char comm[TASK_COMM_LEN];
-    bpf_get_current_comm(&comm, sizeof(comm));
 
-#ifdef FILTER_PID
-    if (pid_tgid >> 32 != FILTER_PID) {
+    struct task_struct *task = (struct task_struct *) bpf_get_current_task();
+    struct pid_namespace *pidns = (struct pid_namespace *)task->nsproxy->pid_ns_for_children;
+    if (pidns->level == 0) {
         return 0;
     }
-#endif
+    // bpf_trace_printk("pidns->level = %d", pidns->level);
 
     u32 key = ctx->ax;
     u64 zero = 0;
@@ -38,7 +38,6 @@ int trace_syscall_entry(struct pt_regs *ctx)
         ++(*val);
     }
 
-    // bpf_trace_printk("CMD: %s PID: %d SYSCALL: %d \\n", comm, pid_tgid, ctx->ax);
     return 0;
 }
 """
@@ -61,10 +60,10 @@ def get_command(pid):
 
 def json_dump():
     data = dict()
-    d =  {str(syscall_name(k.value).decode()): v.value for k, v in b["data"].items()}
-    data["pid"] = args.pid
-    data["command"] = get_command(args.pid)
-    data["syscalls"] = d
+    syscalls_map =  {str(syscall_name(k.value).decode()): v.value for k, v in b["data"].items()}
+    # data["pid"] = args.pid
+    # data["command"] = get_command(args.pid)
+    data["syscalls"] = syscalls_map
     return json.dumps(data)
 
 def print_result():
@@ -81,7 +80,6 @@ while True:
     except KeyboardInterrupt:
         b["data"].clear()
         exit()
-
     except Exception as e:
         print(e)
         b["data"].clear()
