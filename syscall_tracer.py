@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 import argparse
-
+import json
+import time
 from bcc import BPF
 from bcc.syscall import syscall_name, syscalls
 
@@ -51,14 +52,37 @@ if args.ebpf:
 b = BPF(text=bpf_text)
 b.attach_kprobe(event="do_syscall_64", fn_name="trace_syscall_entry")
 
+def get_command(pid):
+    data = ""
+    with open("/proc/{}/cmdline".format(pid)) as f:
+        data = f.read()
+
+    return data.strip().strip("\u0000")
+
+def json_dump():
+    data = dict()
+    d =  {str(syscall_name(k.value).decode()): v.value for k, v in b["data"].items()}
+    data["pid"] = args.pid
+    data["command"] = get_command(args.pid)
+    data["syscalls"] = d
+    return json.dumps(data)
+
+def print_result():
+    for k, v in b["data"].items():
+        if k.value == 0xFFFFFFFF:
+            continue
+        print("{}: {}".format(syscall_name(k.value).decode(), v.value))
+
+
 while True:
     try:
-        for k, v in b["data"].items():
-            if k.value == 0xFFFFFFFF:
-                continue
-            print(syscall_name(k.value));
+        time.sleep(1)
+        print(json_dump())
     except KeyboardInterrupt:
+        b["data"].clear()
         exit()
+
     except Exception as e:
         print(e)
+        b["data"].clear()
         exit(1)
